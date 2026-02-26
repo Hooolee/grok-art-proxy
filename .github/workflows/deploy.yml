@@ -65,64 +65,64 @@ jobs:
         run: |
           echo "--- Resource Discovery Log ---"
           
-          # Get D1 database ID
+          # --- D1 Database ID Resolver ---
           D1_ID="${{ secrets.D1_DATABASE_ID }}"
+          
+          # 1. Check current wrangler.toml first
+          if [ -z "$D1_ID" ]; then
+            TOML_D1=$(sed -n '/\[\[d1_databases\]\]/,/database_id/p' wrangler.toml | grep "database_id" | sed -E 's/.*= "(.*)"/\1/' || echo "")
+            if [ -n "$TOML_D1" ] && [ "$TOML_D1" != "YOUR_D1_DATABASE_ID" ] && [ "$TOML_D1" != "database_id" ]; then
+              D1_ID="$TOML_D1"
+              echo "✅ Using D1 ID from wrangler.toml: $D1_ID"
+            fi
+          fi
+
+          # 2. Check creation output
           if [ -z "$D1_ID" ] && [ -n "${{ steps.create-d1.outputs.d1_id }}" ]; then
             D1_ID="${{ steps.create-d1.outputs.d1_id }}"
-            echo "D1 ID from creation step: $D1_ID"
+            echo "✅ Using D1 ID from creation step: $D1_ID"
           fi
 
-          # If still empty, try to find existing database via API
+          # 3. Fallback: Search via API
           if [ -z "$D1_ID" ]; then
-            echo "Listing D1 databases to find matching name..."
-            D1_LIST=$(npx wrangler d1 list --json 2>/dev/null)
-            D1_ID=$(echo "$D1_LIST" | jq -r ".[] | select(.name | contains(\"${{ env.WORKER_NAME }}\")) | .uuid" | head -1 || echo "")
-            if [ -n "$D1_ID" ]; then echo "Found D1 ID from API: $D1_ID"; fi
+            echo "🔍 Searching D1 via API..."
+            D1_ID=$(npx wrangler d1 list --json 2>/dev/null | jq -r ".[] | select(.name | contains(\"${{ env.WORKER_NAME }}\")) | .uuid" | head -1 || echo "")
+            [ -n "$D1_ID" ] && echo "✅ Found D1 ID via API: $D1_ID"
           fi
 
-          # Fallback: extract from wrangler.toml
-          if [ -z "$D1_ID" ]; then
-            D1_ID=$(sed -n '/\[\[d1_databases\]\]/,/database_id/p' wrangler.toml | grep "database_id" | sed -E 's/.*= "(.*)"/\1/' || echo "")
-            if [ -n "$D1_ID" ] && [ "$D1_ID" != "YOUR_D1_DATABASE_ID" ]; then
-              echo "Recovered D1 ID from wrangler.toml: $D1_ID"
-            else
-              D1_ID=""
+          # --- KV Namespace ID Resolver ---
+          KV_ID="${{ secrets.KV_NAMESPACE_ID }}"
+
+          # 1. Check current wrangler.toml first
+          if [ -z "$KV_ID" ]; then
+            TOML_KV=$(sed -n '/\[\[kv_namespaces\]\]/,/id =/p' wrangler.toml | grep -E '^id =' | sed -E 's/.*= "(.*)"/\1/' || echo "")
+            if [ -n "$TOML_KV" ] && [ "$TOML_KV" != "YOUR_KV_NAMESPACE_ID" ] && [ "$TOML_KV" != "id" ]; then
+              KV_ID="$TOML_KV"
+              echo "✅ Using KV ID from wrangler.toml: $KV_ID"
             fi
           fi
 
-          # Get KV namespace ID
-          KV_ID="${{ secrets.KV_NAMESPACE_ID }}"
+          # 2. Check creation output
           if [ -z "$KV_ID" ] && [ -n "${{ steps.create-kv.outputs.kv_id }}" ]; then
             KV_ID="${{ steps.create-kv.outputs.kv_id }}"
-            echo "KV ID from creation step: $KV_ID"
+            echo "✅ Using KV ID from creation step: $KV_ID"
           fi
 
-          # If still empty, try to find existing namespace via API
+          # 3. Fallback: Search via API
           if [ -z "$KV_ID" ]; then
-            echo "Listing KV namespaces to find matching title..."
-            KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null)
+            echo "🔍 Searching KV via API..."
+            # Added || true to prevent script exit on wrangler error
+            KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
             KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title | contains(\"KV_CACHE\")) | .id" | head -1 || echo "")
-            if [ -n "$KV_ID" ]; then echo "Found KV ID from API: $KV_ID"; fi
+            [ -n "$KV_ID" ] && echo "✅ Found KV ID via API: $KV_ID"
           fi
 
-          # Fallback: extract from wrangler.toml
-          if [ -z "$KV_ID" ]; then
-            # More robust extraction using sed to look within kv_namespaces block
-            KV_ID=$(sed -n '/\[\[kv_namespaces\]\]/,/id =/p' wrangler.toml | grep -E '^id =' | sed -E 's/.*= "(.*)"/\1/' || echo "")
-            if [ -n "$KV_ID" ] && [ "$KV_ID" != "YOUR_KV_NAMESPACE_ID" ]; then
-                echo "Recovered KV ID from wrangler.toml: $KV_ID"
-            else
-                KV_ID=""
-            fi
-          fi
-
-          if [ -z "$D1_ID" ]; then echo "::warning::Could not resolve D1 ID"; fi
-          if [ -z "$KV_ID" ]; then echo "::warning::Could not resolve KV ID"; fi
+          echo "------------------------------"
+          if [ -z "$D1_ID" ]; then echo "❌ D1 ID not resolved!"; fi
+          if [ -z "$KV_ID" ]; then echo "❌ KV ID not resolved!"; fi
 
           echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
-          echo "D1_ID_FINAL=$D1_ID"
-          echo "KV_ID_FINAL=$KV_ID"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
