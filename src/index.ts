@@ -3,9 +3,11 @@ import type { Env } from "./env";
 import { tokenRoutes } from "./routes/tokens";
 import { imagineRoutes } from "./routes/imagine";
 import { proxyRoutes } from "./routes/proxy";
+import { mediaRoutes } from "./routes/media";
 import { authRoutes, hasAuthCookie } from "./routes/auth";
 import { apiKeyRoutes } from "./routes/api-keys";
 import { imagesRoutes } from "./routes/v1/images";
+import { editsRoutes } from "./routes/v1/edits";
 import { videosRoutes } from "./routes/v1/videos";
 import { modelsRoutes } from "./routes/v1/models";
 import { chatRoutes } from "./routes/v1/chat";
@@ -158,6 +160,7 @@ app.route("/", apiKeyRoutes);
 app.use("/v1/*", apiAuthMiddleware);
 app.route("/v1/chat", chatRoutes);
 app.route("/v1/images", imagesRoutes);
+app.route("/v1/images", editsRoutes);
 app.route("/v1/videos", videosRoutes);
 app.route("/v1/models", modelsRoutes);
 
@@ -165,6 +168,7 @@ app.route("/v1/models", modelsRoutes);
 app.route("/", tokenRoutes);
 app.route("/", imagineRoutes);
 app.route("/", proxyRoutes);
+app.route("/", mediaRoutes);
 
 // Health check
 app.get("/health", (c) =>
