@@ -93,7 +93,8 @@ function isLoginPagePath(pathname: string): boolean {
 function isPublicProxyPath(pathname: string): boolean {
   return (
     pathname === "/api/proxy/video" ||
-    pathname.startsWith("/api/proxy/assets/")
+    pathname.startsWith("/api/proxy/assets/") ||
+    pathname.startsWith("/images/")
   );
 }
 

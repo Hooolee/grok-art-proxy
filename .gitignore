@@ -29,3 +29,7 @@ dist/
 
 # Test coverage
 coverage/
+
+# 测试输出和脚本
+output/
+scripts/
