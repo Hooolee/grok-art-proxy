@@ -49,7 +49,7 @@ jobs:
         id: create-kv
         run: |
           # Try to create KV namespace, ignore if already exists
-          OUTPUT=$(npx wrangler kv namespace create KV_CACHE 2>&1) || true
+          OUTPUT=$(npx wrangler kv namespace create ${{ env.KV_NAMESPACE_TITLE }} 2>&1) || true
           echo "$OUTPUT"
 
           # Extract id from output
@@ -66,10 +66,36 @@ jobs:
         id: get-resources
         run: |
           echo "--- Resource Discovery Log ---"
+
+          parse_json_array() {
+            local raw="$1"
+            local parsed=""
+
+            parsed=$(printf '%s\n' "$raw" | jq -c 'if type=="array" then . else [] end' 2>/dev/null || true)
+            if [ -n "$parsed" ]; then
+              echo "$parsed"
+              return
+            fi
+
+            parsed=$(printf '%s\n' "$raw" | sed -n '/^[[:space:]]*\[/,$p' | jq -c 'if type=="array" then . else [] end' 2>/dev/null || true)
+            if [ -n "$parsed" ]; then
+              echo "$parsed"
+              return
+            fi
+
+            parsed=$(printf '%s\n' "$raw" | tail -n 1 | jq -c 'if type=="array" then . else [] end' 2>/dev/null || true)
+            if [ -n "$parsed" ]; then
+              echo "$parsed"
+              return
+            fi
+
+            echo "[]"
+          }
           
           # --- D1 Database ID Resolver ---
           D1_ID=""
-          D1_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+          D1_RAW=$(npx wrangler d1 list --json 2>/dev/null || true)
+          D1_LIST=$(parse_json_array "$D1_RAW")
 
           validate_d1_id() {
             candidate="$1"
@@ -117,7 +143,8 @@ jobs:
 
           # --- KV Namespace ID Resolver ---
           KV_ID=""
-          KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
+          KV_RAW=$(npx wrangler kv namespace list --json 2>/dev/null || true)
+          KV_LIST=$(parse_json_array "$KV_RAW")
 
           validate_kv_id() {
             candidate="$1"
