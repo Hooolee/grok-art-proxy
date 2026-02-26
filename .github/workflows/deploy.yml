@@ -8,6 +8,8 @@ on:
 
 env:
   WORKER_NAME: grok-art-proxy
+  D1_DATABASE_NAME: grok-imagine
+  KV_NAMESPACE_TITLE: KV_CACHE
 
 jobs:
   deploy:
@@ -30,7 +32,7 @@ jobs:
         id: create-d1
         run: |
           # Try to create D1 database, ignore if already exists
-          OUTPUT=$(npx wrangler d1 create ${{ env.WORKER_NAME }} 2>&1) || true
+          OUTPUT=$(npx wrangler d1 create ${{ env.D1_DATABASE_NAME }} 2>&1) || true
           echo "$OUTPUT"
 
           # Extract database_id from output
@@ -66,60 +68,112 @@ jobs:
           echo "--- Resource Discovery Log ---"
           
           # --- D1 Database ID Resolver ---
-          D1_ID="${{ secrets.D1_DATABASE_ID }}"
-          
-          # 1. Check current wrangler.toml first
-          if [ -z "$D1_ID" ]; then
-            TOML_D1=$(sed -n '/\[\[d1_databases\]\]/,/database_id/p' wrangler.toml | grep "database_id" | sed -E 's/.*= "(.*)"/\1/' || echo "")
-            if [ -n "$TOML_D1" ] && [ "$TOML_D1" != "YOUR_D1_DATABASE_ID" ] && [ "$TOML_D1" != "database_id" ]; then
-              D1_ID="$TOML_D1"
-              echo "✅ Using D1 ID from wrangler.toml: $D1_ID"
-            fi
+          D1_ID=""
+          D1_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+
+          validate_d1_id() {
+            candidate="$1"
+            [ -n "$candidate" ] || return 1
+            echo "$D1_LIST" | jq -e --arg id "$candidate" '.[] | select(.uuid == $id)' >/dev/null 2>&1
+          }
+
+          # 1. Prefer secret ID, but only if it exists under current account.
+          SECRET_D1="${{ secrets.D1_DATABASE_ID }}"
+          if validate_d1_id "$SECRET_D1"; then
+            D1_ID="$SECRET_D1"
+            echo "✅ Using D1 ID from secret: $D1_ID"
+          elif [ -n "$SECRET_D1" ]; then
+            echo "⚠️ D1_DATABASE_ID secret not found under current account, ignoring: $SECRET_D1"
           fi
 
-          # 2. Check creation output
-          if [ -z "$D1_ID" ] && [ -n "${{ steps.create-d1.outputs.d1_id }}" ]; then
+          # 2. Check creation output.
+          if [ -z "$D1_ID" ] && validate_d1_id "${{ steps.create-d1.outputs.d1_id }}"; then
             D1_ID="${{ steps.create-d1.outputs.d1_id }}"
             echo "✅ Using D1 ID from creation step: $D1_ID"
           fi
 
-          # 3. Fallback: Search via API
+          # 3. Check wrangler.toml value, but only if valid for current account.
           if [ -z "$D1_ID" ]; then
-            echo "🔍 Searching D1 via API..."
-            D1_ID=$(npx wrangler d1 list --json 2>/dev/null | jq -r ".[] | select(.name | contains(\"${{ env.WORKER_NAME }}\")) | .uuid" | head -1 || echo "")
-            [ -n "$D1_ID" ] && echo "✅ Found D1 ID via API: $D1_ID"
-          fi
-
-          # --- KV Namespace ID Resolver ---
-          KV_ID="${{ secrets.KV_NAMESPACE_ID }}"
-
-          # 1. Check current wrangler.toml first
-          if [ -z "$KV_ID" ]; then
-            TOML_KV=$(sed -n '/\[\[kv_namespaces\]\]/,/id =/p' wrangler.toml | grep -E '^id =' | sed -E 's/.*= "(.*)"/\1/' || echo "")
-            if [ -n "$TOML_KV" ] && [ "$TOML_KV" != "YOUR_KV_NAMESPACE_ID" ] && [ "$TOML_KV" != "id" ]; then
-              KV_ID="$TOML_KV"
-              echo "✅ Using KV ID from wrangler.toml: $KV_ID"
+            TOML_D1=$(sed -n '/\[\[d1_databases\]\]/,/database_id/p' wrangler.toml | grep "database_id" | sed -E 's/.*= "(.*)"/\1/' || echo "")
+            if validate_d1_id "$TOML_D1"; then
+              D1_ID="$TOML_D1"
+              echo "✅ Using D1 ID from wrangler.toml: $D1_ID"
+            elif [ -n "$TOML_D1" ] && [ "$TOML_D1" != "YOUR_D1_DATABASE_ID" ] && [ "$TOML_D1" != "database_id" ]; then
+              echo "⚠️ D1 ID in wrangler.toml not found under current account, ignoring: $TOML_D1"
             fi
           fi
 
-          # 2. Check creation output
-          if [ -z "$KV_ID" ] && [ -n "${{ steps.create-kv.outputs.kv_id }}" ]; then
+          # 4. Fallback: search by configured D1 database name.
+          if [ -z "$D1_ID" ]; then
+            echo "🔍 Searching D1 by name: ${{ env.D1_DATABASE_NAME }}"
+            D1_ID=$(echo "$D1_LIST" | jq -r --arg name "${{ env.D1_DATABASE_NAME }}" '.[] | select(.name == $name) | .uuid' | head -1 || echo "")
+            if [ -n "$D1_ID" ]; then
+              echo "✅ Found D1 ID via API by exact name: $D1_ID"
+            else
+              D1_ID=$(echo "$D1_LIST" | jq -r --arg name "${{ env.D1_DATABASE_NAME }}" '.[] | select(.name | contains($name)) | .uuid' | head -1 || echo "")
+              [ -n "$D1_ID" ] && echo "✅ Found D1 ID via API by fuzzy name: $D1_ID"
+            fi
+          fi
+
+          # --- KV Namespace ID Resolver ---
+          KV_ID=""
+          KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
+
+          validate_kv_id() {
+            candidate="$1"
+            [ -n "$candidate" ] || return 1
+            echo "$KV_LIST" | jq -e --arg id "$candidate" '.[] | select(.id == $id)' >/dev/null 2>&1
+          }
+
+          # 1. Prefer secret ID, but only if it exists under current account.
+          SECRET_KV="${{ secrets.KV_NAMESPACE_ID }}"
+          if validate_kv_id "$SECRET_KV"; then
+            KV_ID="$SECRET_KV"
+            echo "✅ Using KV ID from secret: $KV_ID"
+          elif [ -n "$SECRET_KV" ]; then
+            echo "⚠️ KV_NAMESPACE_ID secret not found under current account, ignoring: $SECRET_KV"
+          fi
+
+          # 2. Check creation output.
+          if [ -z "$KV_ID" ] && validate_kv_id "${{ steps.create-kv.outputs.kv_id }}"; then
             KV_ID="${{ steps.create-kv.outputs.kv_id }}"
             echo "✅ Using KV ID from creation step: $KV_ID"
           fi
 
-          # 3. Fallback: Search via API
+          # 3. Check wrangler.toml value, but only if valid for current account.
           if [ -z "$KV_ID" ]; then
-            echo "🔍 Searching KV via API..."
-            # Added || true to prevent script exit on wrangler error
-            KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title | contains(\"KV_CACHE\")) | .id" | head -1 || echo "")
-            [ -n "$KV_ID" ] && echo "✅ Found KV ID via API: $KV_ID"
+            TOML_KV=$(sed -n '/\[\[kv_namespaces\]\]/,/id =/p' wrangler.toml | grep -E '^id =' | sed -E 's/.*= "(.*)"/\1/' || echo "")
+            if validate_kv_id "$TOML_KV"; then
+              KV_ID="$TOML_KV"
+              echo "✅ Using KV ID from wrangler.toml: $KV_ID"
+            elif [ -n "$TOML_KV" ] && [ "$TOML_KV" != "YOUR_KV_NAMESPACE_ID" ] && [ "$TOML_KV" != "id" ]; then
+              echo "⚠️ KV ID in wrangler.toml not found under current account, ignoring: $TOML_KV"
+            fi
+          fi
+
+          # 4. Fallback: search by configured KV namespace title.
+          if [ -z "$KV_ID" ]; then
+            echo "🔍 Searching KV by title: ${{ env.KV_NAMESPACE_TITLE }}"
+            KV_ID=$(echo "$KV_LIST" | jq -r --arg title "${{ env.KV_NAMESPACE_TITLE }}" '.[] | select(.title == $title) | .id' | head -1 || echo "")
+            if [ -n "$KV_ID" ]; then
+              echo "✅ Found KV ID via API by exact title: $KV_ID"
+            else
+              KV_ID=$(echo "$KV_LIST" | jq -r --arg title "${{ env.KV_NAMESPACE_TITLE }}" '.[] | select(.title | contains($title)) | .id' | head -1 || echo "")
+              [ -n "$KV_ID" ] && echo "✅ Found KV ID via API by fuzzy title: $KV_ID"
+            fi
           fi
 
           echo "------------------------------"
-          if [ -z "$D1_ID" ]; then echo "❌ D1 ID not resolved!"; fi
-          if [ -z "$KV_ID" ]; then echo "❌ KV ID not resolved!"; fi
+          if [ -z "$D1_ID" ]; then
+            echo "❌ D1 ID not resolved for current Cloudflare account."
+            echo "Available D1 databases:"
+            echo "$D1_LIST" | jq -r '.[] | "- \(.name): \(.uuid)"'
+          fi
+          if [ -z "$KV_ID" ]; then
+            echo "❌ KV ID not resolved for current Cloudflare account."
+            echo "Available KV namespaces:"
+            echo "$KV_LIST" | jq -r '.[] | "- \(.title): \(.id)"'
+          fi
 
           echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
           echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
