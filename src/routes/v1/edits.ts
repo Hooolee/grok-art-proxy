@@ -111,8 +111,8 @@ app.post("/edits", async (c) => {
                 continue;
             }
 
-            // 步骤 2：发送编辑请求
-            const editResult = await editImage(prompt, fileUris, token.sso, token.sso_rw);
+            // 步骤 2：发送编辑请求（传入 n，让 Grok 生成对应数量的图片）
+            const editResult = await editImage(prompt, fileUris, token.sso, token.sso_rw, n);
 
             if (editResult.urls.length > 0) {
                 // 更新 API Key 用量

@@ -7,7 +7,7 @@ export interface ModelInfo {
   grokModel: string;
   modelMode: string;
   displayName: string;
-  type: "text" | "image" | "video";
+  type: "text" | "image" | "video" | "edit";
 }
 
 // Supported aspect ratios
@@ -147,6 +147,14 @@ export const MODELS: ModelInfo[] = [
     modelMode: MODEL_MODE_FAST,
     displayName: "Grok Image (9:16)",
     type: "image",
+  },
+  // Image edit models
+  {
+    id: "grok-imagine-1.0-edit",
+    grokModel: "imagine-1.0-edit",
+    modelMode: MODEL_MODE_AUTO,
+    displayName: "Grok Imagine 1.0 Edit",
+    type: "edit",
   },
   // Video models with aspect ratios
   {
