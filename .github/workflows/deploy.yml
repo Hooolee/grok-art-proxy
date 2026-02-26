@@ -69,9 +69,18 @@ jobs:
             D1_ID="${{ steps.create-d1.outputs.d1_id }}"
           fi
 
-          # If still empty, try to find existing database
+          # If still empty, try to find existing database via API
           if [ -z "$D1_ID" ]; then
-            D1_ID=$(npx wrangler d1 list --json 2>/dev/null | jq -r '.[] | select(.name=="${{ env.WORKER_NAME }}") | .uuid' || echo "")
+            D1_ID=$(npx wrangler d1 list --json 2>/dev/null | jq -r '.[] | select(.name | contains("${{ env.WORKER_NAME }}")) | .uuid' || echo "")
+          fi
+
+          # Fallback: read from wrangler.toml if it has a real ID (not placeholder)
+          if [ -z "$D1_ID" ]; then
+            TOML_D1_ID=$(grep 'database_id' wrangler.toml | head -1 | sed 's/.*= "\(.*\)"/\1/')
+            if [ -n "$TOML_D1_ID" ] && [ "$TOML_D1_ID" != "YOUR_D1_DATABASE_ID" ]; then
+              D1_ID="$TOML_D1_ID"
+              echo "Using D1 ID from wrangler.toml: $D1_ID"
+            fi
           fi
 
           # Get KV namespace ID
@@ -80,9 +89,19 @@ jobs:
             KV_ID="${{ steps.create-kv.outputs.kv_id }}"
           fi
 
-          # If still empty, try to find existing namespace
+          # If still empty, try to find existing namespace via API
+          # Note: wrangler creates KV with title "worker-name-BINDING_NAME"
           if [ -z "$KV_ID" ]; then
-            KV_ID=$(npx wrangler kv namespace list --json 2>/dev/null | jq -r '.[] | select(.title=="KV_CACHE") | .id' || echo "")
+            KV_ID=$(npx wrangler kv namespace list --json 2>/dev/null | jq -r '.[] | select(.title | contains("KV_CACHE")) | .id' || echo "")
+          fi
+
+          # Fallback: read from wrangler.toml if it has a real ID (not placeholder)
+          if [ -z "$KV_ID" ]; then
+            TOML_KV_ID=$(grep -A1 '\[\[kv_namespaces\]\]' wrangler.toml | grep 'id' | sed 's/.*= "\(.*\)"/\1/')
+            if [ -n "$TOML_KV_ID" ] && [ "$TOML_KV_ID" != "YOUR_KV_NAMESPACE_ID" ]; then
+              KV_ID="$TOML_KV_ID"
+              echo "Using KV ID from wrangler.toml: $KV_ID"
+            fi
           fi
 
           echo "d1_id=$D1_ID" >> $GITHUB_OUTPUT
