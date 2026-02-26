@@ -143,8 +143,14 @@ jobs:
 
           # --- KV Namespace ID Resolver ---
           KV_ID=""
-          KV_RAW=$(npx wrangler kv namespace list --json 2>/dev/null || true)
-          KV_LIST=$(parse_json_array "$KV_RAW")
+          KV_API_RAW=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces?per_page=100" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" || true)
+          KV_LIST=$(printf '%s\n' "$KV_API_RAW" | jq -c 'if (.success // false) then (.result // []) else [] end' 2>/dev/null || echo "[]")
+          KV_API_ERROR=$(printf '%s\n' "$KV_API_RAW" | jq -r 'if (.success // false) then "" else ((.errors // []) | map(.message) | join("; ")) end' 2>/dev/null || echo "")
+          if [ "$KV_LIST" = "[]" ] && [ -n "$KV_API_ERROR" ]; then
+            echo "⚠️ KV API list warning: $KV_API_ERROR"
+          fi
 
           validate_kv_id() {
             candidate="$1"
@@ -187,6 +193,33 @@ jobs:
             else
               KV_ID=$(echo "$KV_LIST" | jq -r --arg title "${{ env.KV_NAMESPACE_TITLE }}" '.[] | select(.title | contains($title)) | .id' | head -1 || echo "")
               [ -n "$KV_ID" ] && echo "✅ Found KV ID via API by fuzzy title: $KV_ID"
+            fi
+          fi
+
+          # 5. Fallback: create KV namespace via API and refresh lookup.
+          if [ -z "$KV_ID" ]; then
+            echo "🛠 Creating KV namespace via API: ${{ env.KV_NAMESPACE_TITLE }}"
+            KV_CREATE_RAW=$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"title\":\"${{ env.KV_NAMESPACE_TITLE }}\"}" || true)
+            KV_CREATED_ID=$(printf '%s\n' "$KV_CREATE_RAW" | jq -r 'if (.success // false) then (.result.id // "") else "" end' 2>/dev/null || echo "")
+            KV_CREATE_ERROR=$(printf '%s\n' "$KV_CREATE_RAW" | jq -r 'if (.success // false) then "" else ((.errors // []) | map(.message) | join("; ")) end' 2>/dev/null || echo "")
+
+            if [ -n "$KV_CREATED_ID" ]; then
+              KV_ID="$KV_CREATED_ID"
+              echo "✅ Created KV namespace via API: $KV_ID"
+            else
+              [ -n "$KV_CREATE_ERROR" ] && echo "⚠️ KV API create warning: $KV_CREATE_ERROR"
+            fi
+
+            if [ -z "$KV_ID" ]; then
+              KV_API_RAW=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces?per_page=100" \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" || true)
+              KV_LIST=$(printf '%s\n' "$KV_API_RAW" | jq -c 'if (.success // false) then (.result // []) else [] end' 2>/dev/null || echo "[]")
+              KV_ID=$(echo "$KV_LIST" | jq -r --arg title "${{ env.KV_NAMESPACE_TITLE }}" '.[] | select(.title == $title) | .id' | head -1 || echo "")
+              [ -n "$KV_ID" ] && echo "✅ Found KV ID after API refresh: $KV_ID"
             fi
           fi
 
